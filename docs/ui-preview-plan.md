@@ -32,7 +32,7 @@
   content through the official plugin test harness. Update existing layout
   expectations and run the complete test suite, strict validation and TypeScript.
 - [x] Update README and validation notes.
-- [ ] Fast-forward the local checkout and personal fork.
+- [x] Fast-forward the local checkout and personal fork (`main`, implementation `4d60167`).
 - [ ] Have the user reload and verify the visible layout and physical clicks.
 
 The keyboard helper is a separate, completed project and is outside this change.
