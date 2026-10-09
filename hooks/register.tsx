@@ -219,16 +219,12 @@ export const register: Register = on => {
           {list.slice(0, cells.length).map((image, i) => {
             const { columns, rows } = cells[i]!
             const label = imageLabel(image.n)
+            const width = tileColumns(cells[i]!, image.n)
             const canOpen = canClick && image.source !== undefined
             const thumb = image.path ? thumbs.get(image.path) ?? null : null
             return (
-              <Box key={`tile-${image.n}`} flexDirection="column" alignItems="center" width={tileColumns(cells[i]!, image.n)} flexShrink={0}>
+              <Box key={`tile-${image.n}`} flexDirection="column" alignItems="center" width={width} flexShrink={0}>
                 <Box width={columns + 2} height={rows + 2} flexShrink={0}>
-                  {canClick && image.path && (pictures || thumb) && (
-                    <Box position="absolute" top={0} left={0}>
-                      <Client key={`preview-${image.n}`} module="./thumbnail-pointer.tsx" width={columns + 2} height={rows + 2} />
-                    </Box>
-                  )}
                   <Box borderStyle="round" borderDimColor hover={{ borderDimColor: false }} width={columns + 2} height={rows + 2} flexShrink={0}>
                     {image.path === null || (!pictures && !thumb) ? (
                       <Box width={columns} height={rows} alignItems="center" justifyContent="center">
@@ -240,11 +236,24 @@ export const register: Register = on => {
                       <Image key={`image-${image.n}`} source={{ file: image.path!, format: 'png' }} columns={columns} rows={rows} alt={label} />
                     )}
                   </Box>
+                  {/* The host hit-tests later siblings first; keep this above the image. */}
+                  {canClick && image.path && (pictures || thumb) && (
+                    <Box position="absolute" top={0} left={0} width={columns + 2} height={rows + 2}>
+                      <Client key={`preview-${image.n}`} module="./thumbnail-pointer.tsx" width={columns + 2} height={rows + 2} />
+                    </Box>
+                  )}
                 </Box>
-                {canClick && <Button key={`remove-${image.n}`} plain dimColor hover={{ dimColor: false }} onPress={() => remove($, image.n)}>{REMOVE_LABEL}</Button>}
-                {canOpen ? (
-                  <Button key={`open-${image.n}`} plain dimColor hover={{ dimColor: false }} onPress={() => openPicture($, image.source!)}>{label}</Button>
-                ) : <Text dimColor>{label}</Text>}
+                {/* Button sets alignSelf to flex-start; center it on a row's main axis. */}
+                {canClick && (
+                  <Box flexDirection="row" justifyContent="center" width={width} height={1}>
+                    <Button key={`remove-${image.n}`} plain dimColor hover={{ dimColor: false }} onPress={() => remove($, image.n)}>{REMOVE_LABEL}</Button>
+                  </Box>
+                )}
+                <Box flexDirection="row" justifyContent="center" width={width} height={1}>
+                  {canOpen ? (
+                    <Button key={`open-${image.n}`} plain dimColor hover={{ dimColor: false }} onPress={() => openPicture($, image.source!)}>{label}</Button>
+                  ) : <Text dimColor>{label}</Text>}
+                </Box>
               </Box>
             )
           })}

@@ -2,7 +2,7 @@ import type { ClientSurface } from 'claude-code'
 
 type PointerState = { down: { x: number; y: number } | null; dragged: boolean }
 
-/** A transparent hit region behind the picture and its frame. */
+/** A transparent hit region above the picture and its frame. */
 export default function thumbnailPointer(_props: unknown, surface: ClientSurface<PointerState>) {
   const { Box } = surface.elements
   const inside = (x: number, y: number) => x >= 0 && y >= 0 && x < surface.columns && y < surface.rows

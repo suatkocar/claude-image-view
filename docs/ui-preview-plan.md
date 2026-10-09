@@ -11,7 +11,7 @@
   of placing them inline. The screenshot is consistent with that layout.
 - The SDK's `ImageProps` explicitly has no `onPress`; `Button` accepts only
   strings and Text children. A `Client` region supports pointer events. Place
-  a transparent region behind the whole frame, then send a validated message
+  a transparent region above the whole frame, then send a validated message
   to the hooks module to expand the selected image above the prompt.
 - The user explicitly requested a click on the picture/frame, and wants the
   image-label action to remain available. No extra expansion button is needed.
@@ -34,6 +34,16 @@
 - [x] Update README and validation notes.
 - [x] Fast-forward the local checkout and personal fork (`main`, implementation `4d60167`).
 - [ ] Have the user reload and verify the visible layout and physical clicks.
+
+## Follow-up after the 0.3.0 live check
+
+The user reported that controls were left-aligned and thumbnail clicks did
+nothing. Native Button self-alignment and overlapping sibling hit order were
+missing from the official test harness's coverage. Version 0.3.1 centers controls
+inside full-width rows and draws the transparent pointer region last. An isolated
+probe of the actual local host functions reproduced the old targeting failure
+and verified the new sibling order for synthetic picture/frame coordinates.
+Live terminal painting and physical clicks remain to be checked after reload.
 
 The keyboard helper is a separate, completed project and is outside this change.
 No subagents or alternate UI automation of Ghostty will be used.
