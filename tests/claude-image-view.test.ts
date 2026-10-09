@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { fitCells, fitRow, imageNumbers, pngSize } from '../hooks/layout'
+import { fitCells, fitPreview, fitRow, imageNumbers, pngSize, tileColumns } from '../hooks/layout'
 
 function pngHead(width: number, height: number): string {
   const bytes = new Uint8Array(33)
@@ -34,14 +34,46 @@ test('a row of tiles shrinks to fit the band so it never scrolls', () => {
   const square = { width: 500, height: 500 }
   // Plenty of room: full 6-row tiles.
   expect(fitRow([square], 20, 120)).toEqual([{ columns: 12, rows: 6 }])
-  // The number shares the bottom border, leaving five rows for the picture.
-  expect(fitRow([square], 7, 120)).toEqual([{ columns: 10, rows: 5 }])
+  // A full frame and two centered control rows leave three picture rows.
+  expect(fitRow([square], 7, 120)).toEqual([{ columns: 6, rows: 3 }])
   // A narrow band: three 6-row squares need 3 * 14 + 2 = 44 columns; 40 forces 5 rows.
   expect(fitRow([square, square, square], 20, 40)).toEqual([
     { columns: 10, rows: 5 },
     { columns: 10, rows: 5 },
     { columns: 10, rows: 5 },
   ])
+})
+
+test('full multi-digit attachment labels participate in narrow-band overflow', () => {
+  const numbers = [23, 1024, 99999]
+  const sizes = numbers.map(() => ({ width: 1, height: 100 }))
+  for (let width = 10; width <= 50; width++) {
+    const row = fitRow(sizes, 20, width, numbers)
+    if (!row.length) continue
+    const hidden = sizes.length - row.length
+    const used = row.reduce((sum, cells, i) => sum + tileColumns(cells, numbers[i]!), row.length - 1)
+    expect(used + (hidden ? 1 + `+${hidden}`.length : 0) <= width).toBe(true)
+  }
+})
+
+test('enlarged previews fit wide, tall and tiny viewports with a bounded raster payload', () => {
+  for (const size of [null, { width: 500, height: 500 }, { width: 4000, height: 1 }, { width: 1, height: 4000 }]) {
+    for (const columns of [9, 10, 24, 120, 800]) {
+      for (const rows of [4, 5, 20, 100, 500]) {
+        const cells = fitPreview(size, rows, columns)
+        if (columns < 10 || rows < 5) {
+          expect(cells).toBeNull()
+          continue
+        }
+        expect(cells !== null).toBe(true)
+        expect(cells!.columns + 2 <= columns).toBe(true)
+        expect(cells!.rows + 4 <= rows).toBe(true)
+        expect(cells!.columns <= 255 && cells!.rows <= 255).toBe(true)
+        expect(cells!.columns * cells!.rows <= 6000).toBe(true)
+      }
+    }
+  }
+  expect(fitPreview({ width: 500, height: 500 }, 20, 120)).toEqual({ columns: 32, rows: 16 })
 })
 
 const BAND = {

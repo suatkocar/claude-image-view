@@ -8,8 +8,8 @@ const MIN_COLUMNS = 4
 const CELL_ASPECT = 2
 // Used when the size is unknown (file over $.fs.read's 4 MiB cap, or no file).
 const FALLBACK: Size = { width: 16, height: 10 }
-// The image number and actions share the bottom border.
-const TILE_CHROME_ROWS = 2
+// A complete frame, a separate remove row, and the attachment label.
+const TILE_CHROME_ROWS = 4
 const TILE_CHROME_COLUMNS = 2
 const GAP = 1
 
@@ -27,18 +27,28 @@ export function withoutImage(draft: string, n: number): string {
 
 export const REMOVE_LABEL = '[×]'
 
-/** A compact footer exactly as wide as the image and its two border cells. */
-export function footer(n: number, columns: number, hasButton: boolean): { head: string; tail: string } {
-  const width = columns + 2
-  const button = hasButton ? REMOVE_LABEL.length : 0
-  const forms = hasButton
-    ? [[`╰─ #${n} `, ' ', ' ─╯'], [`╰#${n}`, '', '╯'], ['╰', '', '╯']]
-    : [[`╰─ #${n} `, '', '╯'], [`╰#${n}`, '', '╯'], ['╰', '', '╯']]
-  for (const [lead = '', gap = '', tail = ''] of forms) {
-    const dashes = width - lead.length - gap.length - button - tail.length
-    if (dashes >= 1) return { head: lead + '─'.repeat(dashes) + gap, tail }
-  }
-  return { head: '╰', tail: '╯' }
+export function imageLabel(n: number): string {
+  return `[Image #${n}]`
+}
+
+export function tileColumns(cells: Cells, n: number): number {
+  return Math.max(cells.columns + TILE_CHROME_COLUMNS, imageLabel(n).length)
+}
+
+/** Fit the enlarged picture above the prompt, leaving room for its title and controls. */
+export function fitPreview(size: Size | null, maxRows: number, bodyColumns: number): Cells | null {
+  const availableRows = Math.min(255, Math.floor(maxRows) - 4)
+  const availableColumns = Math.min(255, Math.floor(bodyColumns) - 2)
+  if (availableRows < 1 || availableColumns < 8) return null
+  const { width, height } = size ?? FALLBACK
+  const ratio = CELL_ASPECT * width / height
+  let rows = Math.min(availableRows, availableColumns / ratio)
+  let columns = rows * ratio
+  // A Raster cell takes 16 base64 characters; bound the drawing to a 96k payload.
+  const scale = Math.min(1, Math.sqrt(6000 / (columns * rows)))
+  rows *= scale
+  columns *= scale
+  return { columns: Math.max(1, Math.floor(columns)), rows: Math.max(1, Math.floor(rows)) }
 }
 
 /** Width and height from a PNG's IHDR chunk, or null when the bytes aren't a PNG. */
@@ -70,21 +80,21 @@ export function fitCells(size: Size | null, tileRows = TILE_ROWS): Cells {
  * Picture boxes for one row of tiles that fits the band whole, so it never scrolls:
  * the tallest tiles whose chrome fits in `maxRows` and whose total width fits in `bodyColumns`.
  */
-export function fitRow(sizes: readonly (Size | null)[], maxRows: number, bodyColumns: number): Cells[] {
+export function fitRow(sizes: readonly (Size | null)[], maxRows: number, bodyColumns: number, numbers = sizes.map((_, i) => i + 1)): Cells[] {
   if (sizes.length === 0 || maxRows < TILE_CHROME_ROWS + 1 || bodyColumns < MIN_COLUMNS + TILE_CHROME_COLUMNS) return []
   const tallest = Math.min(TILE_ROWS, Math.floor(maxRows) - TILE_CHROME_ROWS)
   for (let tileRows = tallest; tileRows > 1; tileRows--) {
     const cells = sizes.map(size => fitCells(size, tileRows))
-    if (rowWidth(cells, 0) <= bodyColumns) return cells
+    if (rowWidth(cells, numbers, 0) <= bodyColumns) return cells
   }
   const cells = sizes.map(size => fitCells(size, 1))
   let count = cells.length
-  while (count > 0 && rowWidth(cells.slice(0, count), cells.length - count) > bodyColumns) count--
+  while (count > 0 && rowWidth(cells.slice(0, count), numbers, cells.length - count) > bodyColumns) count--
   return cells.slice(0, count)
 }
 
-function rowWidth(cells: readonly Cells[], hidden: number): number {
-  const tiles = cells.reduce((sum, c) => sum + c.columns + TILE_CHROME_COLUMNS, 0) + GAP * Math.max(0, cells.length - 1)
+function rowWidth(cells: readonly Cells[], numbers: readonly number[], hidden: number): number {
+  const tiles = cells.reduce((sum, c, i) => sum + tileColumns(c, numbers[i] ?? i + 1), 0) + GAP * Math.max(0, cells.length - 1)
   return hidden > 0 ? tiles + GAP + `+${hidden}`.length : tiles
 }
 type Env = Readonly<Record<string, string | undefined>>

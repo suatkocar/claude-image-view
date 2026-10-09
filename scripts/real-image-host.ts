@@ -5,8 +5,10 @@ import { access, readdir, lstat, readFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 
 Object.assign(globalThis, {
-  h: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
-  Fragment: 'Fragment',
+  h: (type, props, ...children) => typeof type === 'function'
+    ? type({ ...props, children: children.flat(Infinity) })
+    : ({ type, props: props ?? {}, children: children.flat(Infinity) }),
+  Fragment: ({ children }) => ({ type: 'Box', props: { flexDirection: 'column' }, children }),
 })
 const registerPath = `${process.cwd()}/hooks/register.tsx`
 const { register } = await import(registerPath)
@@ -37,13 +39,13 @@ const $ = {
     const stdout = execFileSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout: init.timeoutMs ?? 10000, stdio: ['ignore', 'pipe', 'pipe'] })
     return { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
   } },
-  ui: { resolve: () => Object.fromEntries(['Box', 'Button', 'Image', 'Raster', 'Text'].map(name => [name, name])) },
+  ui: { resolve: () => Object.fromEntries(['Box', 'Button', 'Client', 'Image', 'Raster', 'Text'].map(name => [name, name])) },
 }
 function nodes(tree): any[] {
   return typeof tree !== 'object' || tree === null ? [] : [tree, ...(tree.children ?? []).flatMap(nodes)]
 }
 const render = () => hooks.get('ui.render')($, {
-  surface: 'terminal', viewport: { isFullscreen: true }, props: { maxRows: 20, bodyColumns: 120 },
+  component: 'AbovePrompt', surface: 'terminal', viewport: { isFullscreen: true }, props: { maxRows: 20, bodyColumns: 120 },
 }, async () => null)
 await hooks.get('session.start')($, {}, async () => ({}))
 for (const [index, extension] of formats.entries()) {
@@ -62,8 +64,17 @@ for (const [index, extension] of formats.entries()) {
   const count = conversions
   await tick!()
   assert.equal(conversions, count, `${extension}: unchanged preview converted twice`)
+  await hooks.get('ui.message')($, {
+    component: 'AbovePrompt', surface: 'terminal', element: `preview-${n}`,
+    module: 'hooks/thumbnail-pointer.tsx', data: 'open-preview',
+  }, async () => ({}))
+  const expanded = nodes(await render())
+  const large = expanded.find(node => node.props.key === `expanded-${n}`)
+  assert.ok(large.props.rows > image.props.rows, `${extension}: preview did not enlarge`)
+  assert.equal(text, `check [Image #${n}] trailing text`)
+  await expanded.find(node => node.props.key === 'close-preview').props.onPress()
   await tree.find(node => node.props.key === `remove-${n}`).props.onPress()
   assert.equal(text, 'check trailing text')
   assert.ok(!nodes(await render()).some(node => node.type === 'Image'))
-  console.log(`PASS ${extension}: actual conversion, ${size.width}x${size.height} PNG, decoder, cache reuse, removal`)
+  console.log(`PASS ${extension}: actual conversion, ${size.width}x${size.height} PNG, decoder, cache reuse, expansion, removal`)
 }

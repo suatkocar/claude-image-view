@@ -8,8 +8,9 @@ Based on [Jarrod Watts's Claude Image View](https://github.com/jarrodwatts/claud
 
 - PNG, JPEG, WebP, HEIC, TIFF, GIF, BMP and AVIF discovery. macOS converts supported files into bounded PNG previews without changing the original attachment.
 - Sharp pictures in Kitty-compatible terminals; colored half-block thumbnails elsewhere.
-- Compact, aligned tiles with a fullscreen **[×]** removal button. Removing an image preserves other image references and draft text.
-- Click the image number in fullscreen mode to open the original attachment in the system viewer.
+- Complete thumbnail frames with a centered **[×]** removal button and an exact **[Image #N]** label below it. Removing an image preserves other image references and draft text.
+- Click a thumbnail or its frame in fullscreen mode to enlarge it above the prompt. **[Close]** restores the thumbnail row without editing the draft.
+- Click **[Image #N]**, or **Open in Preview** in the enlarged view, to open the original attachment in the system viewer.
 - Hover feedback and optional transparent padding around pictures.
 - A **+N** count when more images exist than fit in the available band.
 - Missing or invalid files do not redraw continuously. A file that finishes writing is retried when its metadata changes.
@@ -36,7 +37,7 @@ Existing sessions need `/reload-plugins` to load changes.
 
 ## Requirements and limits
 
-- Claude Code 2.1.287 or later; this integration is verified against 2.1.295.
+- Verified with Claude Code 2.1.295, including its `Client` pointer-event API.
 - macOS for non-PNG conversion through the built-in `sips` tool.
 - Optional `ffmpeg` for transparent side padding. The picture still works without it.
 - Ghostty or another Kitty-compatible terminal for sharp images.
@@ -45,6 +46,8 @@ Existing sessions need `/reload-plugins` to load changes.
 Linux retains PNG previews and the half-block fallback, but has not received an end-to-end desktop check. The Windows-specific launcher from upstream PR #8 is not included.
 
 The fallback decoder accepts non-interlaced PNGs, reads at most the host's 4 MiB file limit, and refuses scanline allocations over 16 MiB. Normal converted previews are at most 800 pixels on their longest side before padding. Animated formats provide a still preview.
+
+The enlarged view reuses that preview and fits within the host's above-prompt band. It is not a full-resolution zoom or a separate window. Use **Open in Preview** for the original image. In very narrow bands only **[Close]** is shown; the image label remains available after closing. A drag or modified/right click does not open the enlarged view. The terminal's `Client` region captures pointer drags over the thumbnail; it does not select transcript text there.
 
 Removing an image edits its `[Image #N]` reference in the draft; it does not delete the original file. The host places the cursor at the end after this edit.
 
@@ -69,7 +72,7 @@ The `image` mode does not enable Kitty support in the host. In background or age
 
 ## Privacy and host access
 
-The mod makes no network requests. It reads the draft, terminal environment and current session's cached images. It runs `id`/`uname` for host discovery, `sips` and optional `ffmpeg` for preview generation, and `open` or `xdg-open` only when the image-number button is pressed.
+The mod makes no network requests. It reads the draft, terminal environment and current session's cached images. It runs `id`/`uname` for host discovery, `sips` and optional `ffmpeg` for preview generation, and `open` or `xdg-open` only when the image-label or system-viewer button is pressed. Clicking the thumbnail itself stays inside the terminal.
 
 It writes derived preview files in the temporary session directory. It does not read Paste's database, manage the clipboard or change keyboard shortcuts.
 
@@ -92,7 +95,7 @@ Claude Code generates `.claude-plugin/types/` and `tsconfig.json` when it loads 
 npm exec --yes --package typescript@5.9.3 -- tsc -p . --noEmit
 ```
 
-The optional real-file check uses Python 3, `bun`, `sips`, `ffmpeg` and `cwebp`. It creates synthetic images in a temporary directory and loads the unmodified hooks through a development host adapter with real filesystem and process calls. It checks actual conversions, decoding, cache reuse, removal of draft references, and unchanged source hashes. The adapter's UI tree does not replace a live terminal/mouse check:
+The optional real-file check uses Python 3, `bun`, `sips`, `ffmpeg` and `cwebp`. It creates synthetic images in a temporary directory and loads the unmodified hooks through a development host adapter with real filesystem and process calls. It checks actual conversions, decoding, cache reuse, expanded-preview state, removal of draft references, and unchanged source hashes. The adapter's UI tree does not replace a live terminal/mouse check:
 
 ```sh
 python3 scripts/verify-real-images.py

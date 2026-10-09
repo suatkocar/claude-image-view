@@ -1,12 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { PastedImage } from '../types'
-import { REMOVE_LABEL, blockCells, drawsPictures, fitRow, footer, imageNumbers, pngSize, withoutImage } from './layout'
+import { REMOVE_LABEL, blockCells, drawsPictures, fitPreview, fitRow, imageLabel, imageNumbers, pngSize, tileColumns, withoutImage } from './layout'
 import { decodeThumb } from './png'
 import type { Thumb } from './png'
 
 const POLL_MS = 200
 const images = atom({ plugin: 'image-view', key: 'images' } as const, [] as PastedImage[])
+const expanded = atom({ plugin: 'image-view', key: 'expanded' } as const, null as number | null)
 type SourceFile = { name: string; size: number; mtimeMs: number; kind: string; isLink: boolean }
 type Preview = { revision: string; image: PastedImage }
 const EXTENSIONS = /\.(png|jpe?g|webp|heic|heif|gif|tiff?|bmp|avif)$/i
@@ -105,6 +106,10 @@ async function refresh($: EngineInterface, epoch: number) {
   const json = JSON.stringify(list)
   if (json === written) return
   await update($, images, () => list)
+  const selected = await read($, expanded)
+  if (selected !== null && !list.some(image => image.n === selected && image.path)) {
+    await update($, expanded, () => null)
+  }
   written = json
 }
 
@@ -145,6 +150,7 @@ export const register: Register = on => {
     pending = undefined
     edits = Promise.resolve()
     const started = await next(e)
+    await update($, expanded, () => null)
     pictures = drawsPictures({
       TERM: await $.env.get('TERM'),
       TERM_PROGRAM: await $.env.get('TERM_PROGRAM'),
@@ -160,53 +166,85 @@ export const register: Register = on => {
     return started
   })
 
+  on('ui.message', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const match = /^preview-(\d+)$/.exec(e.element)
+    if (e.surface !== 'terminal' || e.module !== 'hooks/thumbnail-pointer.tsx' || e.data !== 'open-preview' || !match) return next(e)
+    const n = Number(match[1])
+    const image = (await read($, images)).find(item => item.n === n)
+    if (image?.path && imageNumbers((await $.prompt.read()).text).includes(n)) {
+      await update($, expanded, () => n)
+    }
+    return next(e)
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface !== 'terminal' || e.props.hasSurvey) return next(e)
     const list = await read($, images)
-    const cells = fitRow(list.map(image => image.size), e.props.maxRows, e.props.bodyColumns)
-    if (!cells.length) return next(e)
-    const { Box, Button, Image, Raster, Text } = $.ui.resolve(e)
+    const { Box, Button, Client, Image, Raster, Text } = $.ui.resolve(e)
     const canClick = e.viewport?.isFullscreen === true
-    const hidden = list.length - cells.length
+    const selected = await read($, expanded)
+    const chosen = canClick ? list.find(image => image.n === selected && image.path) : undefined
+    const large = chosen ? fitPreview(chosen.size, e.props.maxRows - 1, e.props.bodyColumns) : null
     const below = await next(e)
+    if (chosen && large) {
+      const thumb = thumbs.get(chosen.path!)
+      return (
+        <Box flexDirection="column">
+          <Box key="expanded-preview" flexDirection="column" alignItems="center" width={e.props.bodyColumns}>
+            <Text bold wrap="truncate">{imageLabel(chosen.n)}</Text>
+            <Box borderStyle="round" borderDimColor width={large.columns + 2} height={large.rows + 2} flexShrink={0}>
+              {thumb && !pictures ? (
+                <Raster key={`expanded-${chosen.n}`} columns={large.columns} rows={large.rows} cells={blockCells(thumb, large.columns, large.rows)} />
+              ) : (
+                <Image key={`expanded-${chosen.n}`} source={{ file: chosen.path!, format: 'png' }} columns={large.columns} rows={large.rows} alt={imageLabel(chosen.n)} />
+              )}
+            </Box>
+            <Box flexDirection="row" columnGap={2}>
+              <Button key="close-preview" plain onPress={() => update($, expanded, () => null)}>[Close]</Button>
+              {chosen.source && e.props.bodyColumns >= 24 && (
+                <Button key="open-preview-original" plain dimColor hover={{ dimColor: false }} onPress={() => openPicture($, chosen.source!)}>{opener === 'open' ? 'Open in Preview' : 'Open original'}</Button>
+              )}
+            </Box>
+          </Box>
+          {below}
+        </Box>
+      )
+    }
+    const cells = fitRow(list.map(image => image.size), e.props.maxRows - 1, e.props.bodyColumns, list.map(image => image.n))
+    if (!cells.length) return below
+    const hidden = list.length - cells.length
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" columnGap={1} alignItems="flex-end">
           {list.slice(0, cells.length).map((image, i) => {
             const { columns, rows } = cells[i]!
-            const side = Array.from({ length: rows }, () => '│').join('\n')
-            const { head, tail } = footer(image.n, columns, canClick)
-            const label = `#${image.n}`
-            const labelAt = head.indexOf(label)
-            const canOpen = canClick && image.source !== undefined && labelAt >= 0
+            const label = imageLabel(image.n)
+            const canOpen = canClick && image.source !== undefined
             const thumb = image.path ? thumbs.get(image.path) ?? null : null
             return (
-              <Box key={`tile-${image.n}`} flexDirection="column">
-                <Text dimColor hover={{ dimColor: false }}>{`╭${'─'.repeat(columns)}╮`}</Text>
-                <Box flexDirection="row">
-                  <Text dimColor hover={{ dimColor: false }}>{side}</Text>
-                  {image.path === null || (!pictures && !thumb) ? (
-                    <Box width={columns} height={rows} alignItems="center" justifyContent="center">
-                      <Text dimColor wrap="truncate">no preview</Text>
+              <Box key={`tile-${image.n}`} flexDirection="column" alignItems="center" width={tileColumns(cells[i]!, image.n)} flexShrink={0}>
+                <Box width={columns + 2} height={rows + 2} flexShrink={0}>
+                  {canClick && image.path && (pictures || thumb) && (
+                    <Box position="absolute" top={0} left={0}>
+                      <Client key={`preview-${image.n}`} module="./thumbnail-pointer.tsx" width={columns + 2} height={rows + 2} />
                     </Box>
-                  ) : thumb && !pictures ? (
-                    <Raster key={`blocks-${image.n}`} columns={columns} rows={rows} cells={blockCells(thumb, columns, rows)} />
-                  ) : (
-                    <Image key={`image-${image.n}`} source={{ file: image.path!, format: 'png' }} columns={columns} rows={rows} alt={`[Image #${image.n}]`} />
                   )}
-                  <Text dimColor hover={{ dimColor: false }}>{side}</Text>
+                  <Box borderStyle="round" borderDimColor hover={{ borderDimColor: false }} width={columns + 2} height={rows + 2} flexShrink={0}>
+                    {image.path === null || (!pictures && !thumb) ? (
+                      <Box width={columns} height={rows} alignItems="center" justifyContent="center">
+                        <Text dimColor wrap="truncate">no preview</Text>
+                      </Box>
+                    ) : thumb && !pictures ? (
+                      <Raster key={`blocks-${image.n}`} columns={columns} rows={rows} cells={blockCells(thumb, columns, rows)} />
+                    ) : (
+                      <Image key={`image-${image.n}`} source={{ file: image.path!, format: 'png' }} columns={columns} rows={rows} alt={label} />
+                    )}
+                  </Box>
                 </Box>
-                <Box flexDirection="row">
-                  {canOpen ? (
-                    <>
-                      <Text dimColor hover={{ dimColor: false }}>{head.slice(0, labelAt)}</Text>
-                      <Button key={`open-${image.n}`} plain dimColor hover={{ dimColor: false }} onPress={() => openPicture($, image.source!)}>{label}</Button>
-                      <Text dimColor hover={{ dimColor: false }}>{head.slice(labelAt + label.length)}</Text>
-                    </>
-                  ) : <Text dimColor hover={{ dimColor: false }}>{head}</Text>}
-                  {canClick && <Button key={`remove-${image.n}`} plain dimColor hover={{ dimColor: false }} onPress={() => remove($, image.n)}>{REMOVE_LABEL}</Button>}
-                  <Text dimColor hover={{ dimColor: false }}>{tail}</Text>
-                </Box>
+                {canClick && <Button key={`remove-${image.n}`} plain dimColor hover={{ dimColor: false }} onPress={() => remove($, image.n)}>{REMOVE_LABEL}</Button>}
+                {canOpen ? (
+                  <Button key={`open-${image.n}`} plain dimColor hover={{ dimColor: false }} onPress={() => openPicture($, image.source!)}>{label}</Button>
+                ) : <Text dimColor>{label}</Text>}
               </Box>
             )
           })}

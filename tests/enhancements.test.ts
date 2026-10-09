@@ -152,8 +152,8 @@ test('overflow is counted and a band too short for a tile preserves the engine c
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await clock.advance(200)
   const narrow = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 36 } })
-  expect(await narrow.find({ type: 'Text', text: '+6' })).toBeDefined()
-  expect(await narrow.find({ key: 'tile-5' })).toBeUndefined()
+  expect(await narrow.find({ type: 'Text', text: '+7' })).toBeDefined()
+  expect(await narrow.find({ key: 'tile-4' })).toBeUndefined()
   await narrow.unmount()
   const short = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 2 } })
   expect(await short.find({ type: 'Image' })).toBeUndefined()
@@ -247,3 +247,111 @@ for (const failure of ['omitOutput', 'failRead'] as const) {
     await ui.unmount()
   })
 }
+
+test('clicking the picture or its frame expands it inside the terminal without editing the draft', async ($, on) => {
+  const draft = 'compare [Image #23] with [Image #24] please'
+  const { state, commands, clock } = setup(on, ['23.jpg', '24.png'], draft)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(200)
+  const ui = await $.ui.mount(BAND)
+  const original = (await ui.find({ key: 'image-23' }))!.props
+  expect((await ui.find({ key: 'open-23' }))?.text).toBe('[Image #23]')
+  expect(await ui.find({ key: 'preview-23' })).toBeDefined()
+
+  for (const [x, y] of [[0, 0], [4, 3]]) {
+    await ui.resize({ in: 'preview-23', columns: 14, rows: 8 })
+    await ui.pointer({ in: 'preview-23', type: 'down', button: 'left', x: x!, y: y! })
+    await ui.pointer({ in: 'preview-23', type: 'up', button: 'left', x: x!, y: y! })
+    const expanded = await ui.find({ key: 'expanded-23' })
+    expect(expanded?.props.source).toEqual(original.source)
+    expect(Number(expanded?.props.rows) > Number(original.rows)).toBe(true)
+    expect(Number(expanded?.props.rows) <= BAND.props.maxRows - 4).toBe(true)
+    expect(await ui.find({ type: 'Text', text: '[Image #23]' })).toBeDefined()
+    expect(state.text).toBe(draft)
+    expect(commands.some(args => args[0] === 'open')).toBe(false)
+    await ui.press({ key: 'close-preview' })
+    expect(await ui.find({ key: 'expanded-23' })).toBeUndefined()
+    expect(await ui.find({ key: 'image-24' })).toBeDefined()
+  }
+  await ui.unmount()
+})
+
+test('dragging, modified clicks and right clicks do not expand the thumbnail', async ($, on) => {
+  const { clock } = setup(on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(200)
+  const ui = await $.ui.mount(BAND)
+  await ui.resize({ in: 'preview-1', columns: 14, rows: 8 })
+  await ui.pointer({ in: 'preview-1', type: 'down', button: 'left', x: 1, y: 1 })
+  await ui.pointer({ in: 'preview-1', type: 'move', button: 'left', x: 8, y: 4 })
+  await ui.pointer({ in: 'preview-1', type: 'up', button: 'left', x: 1, y: 1 })
+  for (const modifiers of [{ button: 'right' as const }, { button: 'left' as const, ctrl: true as const }]) {
+    await ui.pointer({ in: 'preview-1', type: 'down', x: 1, y: 1, ...modifiers })
+    await ui.pointer({ in: 'preview-1', type: 'up', x: 1, y: 1, ...modifiers })
+  }
+  expect(await ui.find({ key: 'expanded-1' })).toBeUndefined()
+  expect(await ui.find({ key: 'image-1' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('an expanded image disappears when its attachment is removed from the draft', async ($, on) => {
+  const { state, clock } = setup(on, ['1.png', '2.png'], 'keep [Image #1] and [Image #2]')
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(200)
+  const ui = await $.ui.mount(BAND)
+  await ui.post('open-preview', { in: 'preview-1' })
+  expect(await ui.find({ key: 'expanded-1' })).toBeDefined()
+  state.text = 'keep and [Image #2]'
+  await clock.advance(200)
+  expect(await ui.find({ key: 'expanded-1' })).toBeUndefined()
+  expect(await ui.find({ key: 'image-2' })).toBeDefined()
+  state.text += ' [Image #1]'
+  await clock.advance(200)
+  expect(await ui.find({ key: 'expanded-1' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the expanded preview can still open the unmodified original in the system viewer', async ($, on) => {
+  const { commands, clock } = setup(on, ['1.heic'])
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(200)
+  const ui = await $.ui.mount(BAND)
+  await ui.post('open-preview', { in: 'preview-1' })
+  await ui.press({ key: 'open-preview-original' })
+  expect(commands.at(-1)).toEqual(['open', `${DIR}/1.heic`])
+  await ui.unmount()
+})
+
+test('the half-block preview enlarges and stays dismissible after a narrow resize', async ($, on) => {
+  const { state, clock } = setup(on)
+  state.renderer = 'blocks'
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(200)
+  const ui = await $.ui.mount(BAND)
+  const small = (await ui.find({ type: 'Raster' }))!.props
+  await ui.post('open-preview', { in: 'preview-1' })
+  expect(await ui.find({ type: 'Image' })).toBeUndefined()
+  const large = (await ui.find({ key: 'expanded-1' }))!.props
+  expect(Number(large.rows) > Number(small.rows)).toBe(true)
+  expect(String(large.cells).length <= 96000).toBe(true)
+  await ui.redraw({ ...BAND.props, bodyColumns: 14, maxRows: 8 })
+  expect(await ui.find({ key: 'close-preview' })).toBeDefined()
+  expect(await ui.find({ key: 'open-preview-original' })).toBeUndefined()
+  await ui.press({ key: 'close-preview' })
+  expect(await ui.find({ key: 'preview-1' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('invalid preview messages and a click on a just-removed attachment cannot open it', async ($, on) => {
+  const { state, clock } = setup(on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(200)
+  const ui = await $.ui.mount(BAND)
+  await ui.post({ action: 'open-preview', number: 1 }, { in: 'preview-1' })
+  expect(await ui.find({ key: 'expanded-1' })).toBeUndefined()
+  state.text = 'keep this text'
+  await ui.post('open-preview', { in: 'preview-1' })
+  expect(await ui.find({ key: 'expanded-1' })).toBeUndefined()
+  expect(state.text).toBe('keep this text')
+  await ui.unmount()
+})
