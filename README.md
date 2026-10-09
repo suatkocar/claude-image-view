@@ -1,111 +1,106 @@
-# Claude Image View
+# Claude Image View — personal fork
 
-A Claude Code mod that shows the images you paste, so you see thumbnails above your prompt instead of bare `[Image #1]` tags.
+A Claude Code mod that previews attached images above the prompt. This fork integrates selected upstream pull requests and additional regression fixes for personal use.
 
-[![License](https://img.shields.io/github/license/jarrodwatts/claude-image-view?v=2)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/jarrodwatts/claude-image-view)](https://github.com/jarrodwatts/claude-image-view/stargazers)
+Based on [Jarrod Watts's Claude Image View](https://github.com/jarrodwatts/claude-image-view). See [the PR review and contributor credits](docs/upstream-review.md) for the exact changes adopted from each author.
 
-![Claude Image View in action](claude-image-view.png)
+## Features
 
-## Install
+- PNG, JPEG, WebP, HEIC, TIFF, GIF, BMP and AVIF discovery. macOS converts supported files into bounded PNG previews without changing the original attachment.
+- Sharp pictures in Kitty-compatible terminals; colored half-block thumbnails elsewhere.
+- Compact, aligned tiles with a fullscreen **[×]** removal button. Removing an image preserves other image references and draft text.
+- Click the image number in fullscreen mode to open the original attachment in the system viewer.
+- Hover feedback and optional transparent padding around pictures.
+- A **+N** count when more images exist than fit in the available band.
+- Missing or invalid files do not redraw continuously. A file that finishes writing is retried when its metadata changes.
 
-Inside Claude Code, run:
+## Install this fork
+
+Inside Claude Code:
 
 ```
-/plugin marketplace add jarrodwatts/claude-image-view
-/plugin install image-view
+/plugin marketplace add suatkocar/claude-image-view
+/plugin install image-view@suatkocar-image-view
 /reload-plugins
 ```
 
-That's it. Paste an image into the prompt and its thumbnail appears above the input.
+Use one copy of the mod at a time. If the upstream plugin is already installed, disable that copy before enabling this fork.
 
-<details>
-<summary><strong>Prefer the terminal?</strong></summary>
+For a session using a local checkout:
 
-```bash
-claude plugin marketplace add jarrodwatts/claude-image-view
-claude plugin install image-view@claude-image-view
+```sh
+claude --plugin-dir /path/to/claude-image-view
 ```
 
-Then run `/reload-plugins` inside a session, or start a new one.
+Existing sessions need `/reload-plugins` to load changes.
 
-</details>
+## Requirements and limits
 
-## What You See
+- Claude Code 2.1.287 or later; this integration is verified against 2.1.295.
+- macOS for non-PNG conversion through the built-in `sips` tool.
+- Optional `ffmpeg` for transparent side padding. The picture still works without it.
+- Ghostty or another Kitty-compatible terminal for sharp images.
+- Fullscreen mode for mouse controls. Inline mode shows previews without clickable actions.
 
-Paste one or more images and a row of thumbnails sits above the prompt, each labelled with the number of its tag:
+Linux retains PNG previews and the half-block fallback, but has not received an end-to-end desktop check. The Windows-specific launcher from upstream PR #8 is not included.
 
+The fallback decoder accepts non-interlaced PNGs, reads at most the host's 4 MiB file limit, and refuses scanline allocations over 16 MiB. Normal converted previews are at most 800 pixels on their longest side before padding. Animated formats provide a still preview.
+
+Removing an image edits its `[Image #N]` reference in the draft; it does not delete the original file. The host places the cursor at the end after this edit.
+
+## How it works
+
+Every 200ms the mod reads the draft's image references and locates the current session's image cache under `<CLAUDE_CODE_TMPDIR>/claude-<uid>`, or `/tmp/claude-<uid>` when unset. It searches the actual numbered image files rather than assuming they all end in `.png`.
+
+Preview PNGs are written alongside the session's `images` directory, with names beginning `image-view-`. Successful and failed results are cached by source path, size and modification time. Existing attachments are never overwritten. Preview files remain with that temporary session directory; the mod does not delete user files.
+
+Conversion runs without a shell and has a ten-second timeout per process. Optional padding uses a single encoding/filter thread. If the draft changes during conversion, stale tiles are discarded.
+
+## Renderer selection
+
+Automatic detection uses the terminal environment. Override it when necessary:
+
+```sh
+CLAUDE_IMAGE_VIEW_RENDERER=image claude --plugin-dir .
+CLAUDE_IMAGE_VIEW_RENDERER=blocks claude --plugin-dir .
 ```
-╭────────────────────────╮ ╭────────────╮
-│                        │ │            │
-│      (screenshot)      │ │  (photo)   │
-│                        │ │            │
-│           #1           │ │     #2     │
-╰────────────────────────╯ ╰────────────╯
-❯ why is the header misaligned here [Image #1] vs [Image #2]
-```
 
-- **Thumbnails appear as soon as you paste.** You don't have to type another key first.
-- **Thumbnails keep their shape.** Wide screenshots stay wide and phone shots stay tall.
-- **Always fits on screen.** Tiles shrink to fit the space above the prompt, so the row never scrolls or gets cut off.
-- **Clears on send.** Once the prompt is sent (or the tags are deleted), the row goes away.
+The `image` mode does not enable Kitty support in the host. In background or agent-view sessions where Claude Code disables terminal images, the host may also need `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1`; the mod does not change that setting.
 
-## How It Works
+## Privacy and host access
 
-Claude Code saves every pasted image to a cache folder for the session, as `<tmp>/<project>/<session>/images/<n>.png`, and puts an `[Image #n]` tag in the prompt. Claude Image View is a [mod](https://code.claude.com/docs/en/plugins/mods/overview):
+The mod makes no network requests. It reads the draft, terminal environment and current session's cached images. It runs `id`/`uname` for host discovery, `sips` and optional `ffmpeg` for preview generation, and `open` or `xdg-open` only when the image-number button is pressed.
 
-1. Every 200ms it reads the prompt box and looks for `[Image #n]` tags. It checks on a timer because pasting an image doesn't raise an edit event.
-2. For each tag it finds the cached PNG and reads its size from the PNG header.
-3. It draws the thumbnails in the band above the prompt with Claude Code's `Image` element. The terminal reads the file itself, so the image data never passes through the mod.
+It writes derived preview files in the temporary session directory. It does not read Paste's database, manage the clipboard or change keyboard shortcuts.
 
-## Security
-
-Claude Image View is local-only. It makes no network requests and writes no files. It reads the prompt box, lists Claude Code's temp folder to find the current session's image cache, and reads the first bytes of each pasted image. If `CLAUDE_CODE_TMPDIR` isn't set, it runs `id -u` once to find the default temp folder.
-
-Run `claude plugin validate` on the repo to see every event it hooks and every call it makes.
-
-## Requirements
-
-- Claude Code v2.1.287 or later (mods support)
-- macOS or Linux
-- A terminal with the kitty graphics protocol, such as [Ghostty](https://ghostty.org) or [kitty](https://sw.kovidgoyal.net/kitty/)
-
-Other terminals show `[Image #n]` in each tile instead of the picture. The Claude Desktop app already previews pasted images, so the mod draws nothing there.
-
-## Troubleshooting
-
-**Nothing appears when I paste.** Run `/plugin` and check the dim line under the tabs lists `image-view` as an active mod. If it isn't listed, run `/reload-plugins`.
-
-**The tile says "no preview".** The mod couldn't find the cached file. Claude Code may have moved where it stores pasted images. Please [open an issue](https://github.com/jarrodwatts/claude-image-view/issues) with your Claude Code version.
-
-**The tile shows `[Image #1]` text instead of the picture.** Your terminal doesn't support the kitty graphics protocol. See [Requirements](#requirements).
-
-**The tile shows `[Image #1]` text in agent view or a background session, even in Ghostty or kitty.** Claude Code turns terminal images off for background sessions. If you attach from a terminal with the kitty graphics protocol, turn them back on in the `env` block of `~/.claude/settings.json`, then start a new session:
-
-```json
-"env": { "CLAUDE_CODE_FORCE_TERMINAL_IMAGES": "1" }
-```
+Run `claude plugin validate . --strict` to inspect all declared hooks and host calls.
 
 ## Development
 
-```bash
-git clone https://github.com/jarrodwatts/claude-image-view
+```sh
+git clone https://github.com/suatkocar/claude-image-view
 cd claude-image-view
-
-# Load it for one session without installing
+git remote add upstream https://github.com/jarrodwatts/claude-image-view
 claude --plugin-dir .
-
-# Check it and run the tests
-claude plugin validate .
 claude plugin test .
+claude plugin validate . --strict
 ```
 
-Claude Code writes the API types into `.claude-plugin/types/` the first time it loads the mod, and `tsc -p .` type-checks it from then on.
+Claude Code generates `.claude-plugin/types/` and `tsconfig.json` when it loads the mod. Type-check with:
+
+```sh
+npm exec --yes --package typescript@5.9.3 -- tsc -p . --noEmit
+```
+
+The optional real-file check uses Python 3, `bun`, `sips`, `ffmpeg` and `cwebp`. It creates synthetic images in a temporary directory and loads the unmodified hooks through a development host adapter with real filesystem and process calls. It checks actual conversions, decoding, cache reuse, removal of draft references, and unchanged source hashes. The adapter's UI tree does not replace a live terminal/mouse check:
+
+```sh
+python3 scripts/verify-real-images.py
+```
+
+See [upstream review](docs/upstream-review.md) for updating the fork and deliberate exclusions.
+See [validation results](docs/validation.md) for the checks performed and the outstanding live UI check.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=jarrodwatts/claude-image-view&type=Date)](https://star-history.com/#jarrodwatts/claude-image-view&Date)
+MIT. The original [LICENSE](LICENSE) is retained.

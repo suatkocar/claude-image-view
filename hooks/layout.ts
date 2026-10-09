@@ -8,8 +8,8 @@ const MIN_COLUMNS = 4
 const CELL_ASPECT = 2
 // Used when the size is unknown (file over $.fs.read's 4 MiB cap, or no file).
 const FALLBACK: Size = { width: 16, height: 10 }
-// Each tile adds a border on every side and a label row under the picture.
-const TILE_CHROME_ROWS = 3
+// The image number and actions share the bottom border.
+const TILE_CHROME_ROWS = 2
 const TILE_CHROME_COLUMNS = 2
 const GAP = 1
 
@@ -20,10 +20,32 @@ export function imageNumbers(draft: string): number[] {
   return [...seen]
 }
 
+/** Remove this attachment's tags without changing other text or image numbers. */
+export function withoutImage(draft: string, n: number): string {
+  return draft.replace(new RegExp(`\\[Image #${n}\\] ?`, 'g'), '')
+}
+
+export const REMOVE_LABEL = '[×]'
+
+/** A compact footer exactly as wide as the image and its two border cells. */
+export function footer(n: number, columns: number, hasButton: boolean): { head: string; tail: string } {
+  const width = columns + 2
+  const button = hasButton ? REMOVE_LABEL.length : 0
+  const forms = hasButton
+    ? [[`╰─ #${n} `, ' ', ' ─╯'], [`╰#${n}`, '', '╯'], ['╰', '', '╯']]
+    : [[`╰─ #${n} `, '', '╯'], [`╰#${n}`, '', '╯'], ['╰', '', '╯']]
+  for (const [lead = '', gap = '', tail = ''] of forms) {
+    const dashes = width - lead.length - gap.length - button - tail.length
+    if (dashes >= 1) return { head: lead + '─'.repeat(dashes) + gap, tail }
+  }
+  return { head: '╰', tail: '╯' }
+}
+
 /** Width and height from a PNG's IHDR chunk, or null when the bytes aren't a PNG. */
 export function pngSize(base64: string): Size | null {
   // 24 bytes cover the signature and IHDR's width and height; 32 base64 chars decode to exactly 24.
-  const head = Uint8Array.from(atob(base64.slice(0, 32)), char => char.charCodeAt(0))
+  let head: Uint8Array
+  try { head = Uint8Array.from(atob(base64.slice(0, 32)), char => char.charCodeAt(0)) } catch { return null }
   const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
   if (head.length < 24 || signature.some((byte, i) => head[i] !== byte)) return null
   const view = new DataView(head.buffer, head.byteOffset, head.byteLength)
@@ -49,11 +71,78 @@ export function fitCells(size: Size | null, tileRows = TILE_ROWS): Cells {
  * the tallest tiles whose chrome fits in `maxRows` and whose total width fits in `bodyColumns`.
  */
 export function fitRow(sizes: readonly (Size | null)[], maxRows: number, bodyColumns: number): Cells[] {
-  const tallest = Math.max(1, Math.min(TILE_ROWS, maxRows - TILE_CHROME_ROWS))
+  if (sizes.length === 0 || maxRows < TILE_CHROME_ROWS + 1 || bodyColumns < MIN_COLUMNS + TILE_CHROME_COLUMNS) return []
+  const tallest = Math.min(TILE_ROWS, Math.floor(maxRows) - TILE_CHROME_ROWS)
   for (let tileRows = tallest; tileRows > 1; tileRows--) {
     const cells = sizes.map(size => fitCells(size, tileRows))
-    const width = cells.reduce((sum, c) => sum + c.columns + TILE_CHROME_COLUMNS, 0) + GAP * (cells.length - 1)
-    if (width <= bodyColumns) return cells
+    if (rowWidth(cells, 0) <= bodyColumns) return cells
   }
-  return sizes.map(size => fitCells(size, 1))
+  const cells = sizes.map(size => fitCells(size, 1))
+  let count = cells.length
+  while (count > 0 && rowWidth(cells.slice(0, count), cells.length - count) > bodyColumns) count--
+  return cells.slice(0, count)
+}
+
+function rowWidth(cells: readonly Cells[], hidden: number): number {
+  const tiles = cells.reduce((sum, c) => sum + c.columns + TILE_CHROME_COLUMNS, 0) + GAP * Math.max(0, cells.length - 1)
+  return hidden > 0 ? tiles + GAP + `+${hidden}`.length : tiles
+}
+type Env = Readonly<Record<string, string | undefined>>
+
+/**
+ * Whether the terminal draws `Image` as a real picture, which takes the kitty graphics protocol.
+ * `CLAUDE_IMAGE_VIEW_RENDERER` forces it: `image` for the picture, `blocks` for colored half blocks.
+ */
+export function drawsPictures(env: Env): boolean {
+  const forced = env.CLAUDE_IMAGE_VIEW_RENDERER
+  if (forced === 'image' || forced === 'blocks') return forced === 'image'
+  // Use blocks under tmux unless the user explicitly opts into graphics passthrough.
+  if (env.TMUX) return false
+  const term = env.TERM ?? ''
+  const program = env.TERM_PROGRAM ?? ''
+  return (
+    Boolean(env.KITTY_WINDOW_ID || env.GHOSTTY_RESOURCES_DIR || env.WEZTERM_EXECUTABLE) ||
+    /kitty|ghostty/i.test(term) ||
+    /^(ghostty|WezTerm)$/i.test(program)
+  )
+}
+
+/**
+ * The cells of a `Raster` that draws `rgb` (a `width` x `height` thumbnail) in `columns` x `rows`
+ * cells, base64. Each cell is an upper half block, so it holds two pixels: the top as its
+ * foreground and the bottom as its background.
+ */
+export function blockCells(thumb: { width: number; height: number; rgb: Uint8Array }, columns: number, rows: number): string {
+  const pixelRows = rows * 2
+  const average = (px: number, py: number): number => {
+    // The box of source pixels under output pixel (px, py), at least one pixel wide and tall.
+    const x0 = Math.floor((px * thumb.width) / columns)
+    const x1 = Math.max(x0 + 1, Math.floor(((px + 1) * thumb.width) / columns))
+    const y0 = Math.floor((py * thumb.height) / pixelRows)
+    const y1 = Math.max(y0 + 1, Math.floor(((py + 1) * thumb.height) / pixelRows))
+    let r = 0
+    let g = 0
+    let b = 0
+    let n = 0
+    for (let y = y0; y < y1 && y < thumb.height; y++) {
+      for (let x = x0; x < x1 && x < thumb.width; x++, n++) {
+        const at = (y * thumb.width + x) * 3
+        r += thumb.rgb[at]!
+        g += thumb.rgb[at + 1]!
+        b += thumb.rgb[at + 2]!
+      }
+    }
+    n = n || 1
+    return (Math.round(r / n) << 16) | (Math.round(g / n) << 8) | Math.round(b / n)
+  }
+  const words = new Uint32Array(columns * rows * 3)
+  for (let row = 0; row < rows; row++) {
+    for (let column = 0; column < columns; column++) {
+      const at = (row * columns + column) * 3
+      words[at] = 0x2580
+      words[at + 1] = average(column, row * 2)
+      words[at + 2] = average(column, row * 2 + 1)
+    }
+  }
+  return (new Uint8Array(words.buffer) as Uint8Array & { toBase64(): string }).toBase64()
 }

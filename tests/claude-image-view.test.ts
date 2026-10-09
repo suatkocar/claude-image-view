@@ -34,8 +34,8 @@ test('a row of tiles shrinks to fit the band so it never scrolls', () => {
   const square = { width: 500, height: 500 }
   // Plenty of room: full 6-row tiles.
   expect(fitRow([square], 20, 120)).toEqual([{ columns: 12, rows: 6 }])
-  // A short band: border and label take 3 rows, so the picture gets the rest.
-  expect(fitRow([square], 7, 120)).toEqual([{ columns: 8, rows: 4 }])
+  // The number shares the bottom border, leaving five rows for the picture.
+  expect(fitRow([square], 7, 120)).toEqual([{ columns: 10, rows: 5 }])
   // A narrow band: three 6-row squares need 3 * 14 + 2 = 44 columns; 40 forces 5 rows.
   expect(fitRow([square, square, square], 20, 40)).toEqual([
     { columns: 10, rows: 5 },
@@ -58,12 +58,12 @@ test('a pasted image shows without another keystroke and clears when the draft d
   let draft = 'see [Image #1] [Image #2]'
   on('session.start', () => ({ cwd: '/work' }))
   on('prompt.read', () => ({ value: { text: draft, cursor: draft.length } }))
-  on('env.get', () => ({ value: '/tmp/claude-501' }))
+  on('env.get', (_, e) => ({ value: e.name === 'CLAUDE_IMAGE_VIEW_RENDERER' ? 'image' : undefined }))
   on('session.id', () => ({ value: 'sess-1' }))
   // Another project's folder and a stray file sit beside the one holding this session.
   const entry = { size: 0, mtimeMs: 0, isLink: false }
-  on('fs.list', () => ({
-    value: [
+  on('fs.list', (_, e) => ({
+    value: e.path === dir ? [{ name: '1.png', kind: 'file', ...entry }] : [
       { name: '-other', kind: 'dir', ...entry },
       { name: 'notes.txt', kind: 'file', ...entry },
       { name: '-work', kind: 'dir', ...entry },
@@ -71,6 +71,8 @@ test('a pasted image shows without another keystroke and clears when the draft d
   }))
   on('fs.exists', ($, e) => ({ value: e.path === dir || e.path === `${dir}/1.png` }))
   on('fs.read', () => ({ value: { base64: pngHead(800, 400) } }))
+  // Missing conversion tools retain the valid original PNG.
+  on('process.run', (_, e) => ({ value: { exitCode: e.argv[0] === 'id' ? 0 : 1, stdout: e.argv[0] === 'id' ? '501\n' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['engine band'] }))
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
